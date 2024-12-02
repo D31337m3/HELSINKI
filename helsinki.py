@@ -272,8 +272,11 @@ class MetricsCollector:
             'attempts_per_second': self.metrics['attempts'] / total_time if total_time > 0 else 0
         }
 
+# First, create the logs directory
+LOGS_DIR = Path("logs")
+LOGS_DIR.mkdir(exist_ok=True, parents=True)
 
-# Configure logging
+# Then configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -283,7 +286,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
 class Network:
     """Enhanced network configuration with validation"""
     def __init__(self, name: str, api_url: str, api_key: str = None, decimals: int = 18, chain_id: int = None):
