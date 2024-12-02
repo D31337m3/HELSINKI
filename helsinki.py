@@ -109,68 +109,81 @@ class NetworkFactory:
               return networks
 
 class RateLimiter:
-          def __init__(self, calls_per_second: int):
-              self.rate = calls_per_second
-              self.tokens = self.rate
-              self.last_update = time.time()
-              self.token_bucket_size = calls_per_second * 2
+    def __init__(self, calls_per_second: int):
+        self.rate = calls_per_second
+        self.tokens = self.rate
+        self.last_update = time.time()
+        self.token_bucket_size = calls_per_second * 2
 
-          def acquire(self) -> None:
-              current = time.time()
-              time_passed = current - self.last_update
-              self.tokens = min(
-                  self.token_bucket_size,
-                  self.tokens + time_passed * self.rate
-              )
+    def acquire(self) -> None:
+        current = time.time()
+        time_passed = current - self.last_update
+        self.tokens = min(
+            self.token_bucket_size,
+            self.tokens + time_passed * self.rate
+        )
+        
+        if self.tokens < 1:
+            sleep_time = (1 - self.tokens) / self.rate
+            time.sleep(sleep_time)
+            self.tokens = 0
+        else:
+            self.tokens -= 1
+        
+        self.last_update = current
 
 class MemoryManager:
-          def __init__(self, threshold_mb: int = 1000):
-              self.threshold_bytes = threshold_mb * 1024 * 1024
-              self.initial_usage = self._get_memory_usage()
+    def __init__(self, threshold_mb: int = 1000):
+        self.threshold_bytes = threshold_mb * 1024 * 1024
+        self.initial_usage = self._get_memory_usage()
+  
+    def _get_memory_usage(self) -> int:
+        """
+        Get memory usage using native Python memory tracking
+        """
+        import sys
+        return sys.getsizeof(globals()) + sys.getsizeof(locals())
+      
+    def memory_managed_check(self) -> None:
+        if self._get_memory_usage() > self.threshold_bytes:
+            gc.collect()
+      
+    def get_memory_usage(self) -> Dict[str, float]:
+        current_usage = self._get_memory_usage()
+        return {
+            'current_mb': current_usage / 1024 / 1024,
+            'delta_mb': (current_usage - self.initial_usage) / 1024 / 1024
+        }
+    
+    class RetryStrategy:
         
-          def _get_memory_usage(self) -> int:
-              """
-              Get memory usage using native Python memory tracking
-              """
-              import sys
-              return sys.getsizeof(globals()) + sys.getsizeof(locals())
-            
-          def memory_managed_check(self) -> None:
-              if self._get_memory_usage() > self.threshold_bytes:
-                  gc.collect()
-            
-          def get_memory_usage(self) -> Dict[str, float]:
-              current_usage = self._get_memory_usage()
-              return {
-                  'current_mb': current_usage / 1024 / 1024,
-                  'delta_mb': (current_usage - self.initial_usage) / 1024 / 1024
-              }
-        
-          def acquire(self):
-            if self.tokens < 1:
-                sleep_time = (1 - self.tokens) / self.rate
-                time.sleep(sleep_time)
-                self.tokens = 0
-            else:
-                self.tokens -= 1
-            
-        self.last_update = current # type: ignore
-class RetryStrategy:
-      @staticmethod
-      def with_exponential_backoff(func: Callable, max_retries: int = 3, base_delay: float = 1.0):
-          @functools.wraps(func)
-          def wrapper(*args, **kwargs):
-              for attempt in range(max_retries):
-                  try:
-                      return func(*args, **kwargs)
-                  except Exception as e:
-                      if attempt == max_retries - 1:
-                          raise
-                      delay = base_delay * (2 ** attempt)  # Exponential backoff
-                      time.sleep(delay)
-              return None
-          return wrapper
-
+         @staticmethod
+         def with_exponential_backoff(func: Callable, max_retries: int = 3, base_delay: float = 1.0):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                for attempt in range(max_retries):
+                    try:
+                        return func(*args, **kwargs)
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            raise
+                        delay = base_delay * (2 ** attempt)  # Exponential backoff
+                        time.sleep(delay)
+                return None
+            return wrapper
+    def with_exponential_backoff(func: Callable, max_retries: int = 3, base_delay: float = 1.0):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                for attempt in range(max_retries):
+                    try:
+                        return func(*args, **kwargs)
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            raise
+                        delay = base_delay * (2 ** attempt)  # Exponential backoff
+                        time.sleep(delay)
+                return None
+            return wrapper
 class NetworkFactory:
       @staticmethod
       def create_networks(config_path: Path) -> Dict[str, Network]:
