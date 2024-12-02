@@ -50,6 +50,7 @@ ATTEMPT_COUNTER: int = 0              # Tracks total generation attempts
 VERSION: str = "1.0.1"                # Current software version
 MAX_RETRIES: int = 3                  # Maximum API retry attempts
 REQUEST_TIMEOUT: int = 10             # API request timeout in seconds
+DEFAULT_MAX_ATTEMPTS: int = 50        # Default maximum attempts for balance checking
 
 def initialize_environment():
     """Initialize required files and folders for Helsinki"""
@@ -79,16 +80,20 @@ class Network:
         api_key: Authentication key for API access
         decimals: Token decimal places for balance calculation
         chain_id: Network chain identifier
-    
-    Methods:
-        get_balance_url: Generates properly formatted API URL for balance checks
-    """@dataclass
+    """
+    def __init__(self, name: str, api_url: str, api_key: str = None, decimals: int = 18, chain_id: int = None):
+        self.name = name
+        self.api_url = api_url.rstrip('/')  # Ensure consistent URL format
+        self.api_key = api_key
+        self.decimals = decimals
+        self.chain_id = chain_id
+
+@dataclass
 class NetworkConfig:
     name: str
     api_url: str
     chain_id: int
     decimals: int
-
 class NetworkFactory:
           @staticmethod
           def create_networks(config_path: Path) -> Dict[str, Network]:
@@ -420,7 +425,6 @@ class WalletGenerator:
         mnemonic = cls.generate_mnemonic(wordlist)
         address = cls.derive_address(mnemonic)
         return mnemonic, address
-
 class BalanceChecker:
     """Network balance checking implementation"""
     @staticmethod
@@ -438,10 +442,11 @@ class BalanceChecker:
                 data = json.loads(response.read())
             
             if network.name == "BTC":
-                return float(data.get('data', {}).get(address, {}).get('balance', 0)) / (10 ** network.decimals)
-            elif data.get('status') == '1':
-                return float(data.get('result', 0)) / (10 ** network.decimals)
-            return 0.0
+                balance = data.get('data', {}).get(address, {}).get('balance', 0)
+                return float(balance if balance is not None else 0) / (10 ** network.decimals)
+            else:
+                result = data.get('result', '0')
+                return float(result if result is not None else 0) / (10 ** network.decimals)
             
         except urllib.error.HTTPError as e:
             if retry_count < MAX_RETRIES:
@@ -453,9 +458,39 @@ class BalanceChecker:
         except Exception as e:
             logger.error(f"API Error ({network.name}): {str(e)}")
             return 0.0
-
-class ResultLogger:
-    """Enhanced result logging with metrics"""
+        class ResultLogger:
+            """Enhanced result logging with metrics"""
+            @staticmethod
+            def log_finding(mnemonic: str, address: str, balances: List[Dict], metrics: Dict) -> None:
+                try:
+                    LOGS_DIR.mkdir(exist_ok=True)
+            
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = LOGS_DIR / f"found_{timestamp}.json"
+            
+                    data = {
+                        "timestamp": timestamp,
+                        "mnemonic": mnemonic,
+                        "address": address,
+                        "balances": balances,
+                        "performance_metrics": {
+                            "total_attempts": metrics['total_attempts'],
+                            "success_rate": f"{metrics['success_rate']:.2%}",
+                            "average_latency": f"{metrics['average_latency']:.3f}s",
+                            "attempts_per_second": f"{metrics['attempts_per_second']:.2f}",
+                            "memory_usage": metrics.get('memory_usage', {}),
+                            "api_stats": {
+                                "successful_calls": metrics.get('successful_calls', 0),
+                                "failed_calls": metrics.get('failed_calls', 0)
+                            }
+                        }
+                    }
+            
+                    with open(filename, 'w') as f:
+                        json.dump(data, f, indent=2)
+                    logger.info(f"Results and metrics logged to {filename}")
+                except Exception as e:
+                    logger.error(f"Failed to log results: {str(e)}")
     @staticmethod
     def log_finding(mnemonic: str, address: str, balances: List[Dict], metrics: Dict) -> None:
         try:
@@ -549,6 +584,8 @@ def parse_args():
                                       help='Force API key setup')
     
                    return parser.parse_args()
+DEFAULT_MAX_ATTEMPTS: int = 50
+
 def get_max_attempts(args) -> int:
     if args.attempts is not None:
         return args.attempts
@@ -557,19 +594,8 @@ def get_max_attempts(args) -> int:
     if 'max_attempts' in config:
         return config['max_attempts']
         
-    while True:
-        try:
-            user_input = input(f"\nEnter maximum number of attempts (default: 50): ").strip()
-            if not user_input:
-                return 50
-            attempts = int(user_input)
-            if attempts > 0:
-                config['max_attempts'] = attempts
-                ConfigManager.save(config)
-                return attempts
-            print("Please enter a positive number")
-        except ValueError:
-            print("Please enter a valid number")
+    # Return default value without prompting
+    return DEFAULT_MAX_ATTEMPTS
 
 def continuous_check(verbose: bool = False, 
                     delay: float = API_DELAY, 
@@ -584,7 +610,7 @@ def continuous_check(verbose: bool = False,
     while True:
         try:
             ATTEMPT_COUNTER += 1
-            if max_attempts > 0 and ATTEMPT_COUNTER > max_attempts:
+            if max_attempts and isinstance(max_attempts, int) and ATTEMPT_COUNTER > max_attempts:
                 logger.info(f"Reached maximum attempts: {max_attempts}")
                 break
                 
@@ -596,15 +622,18 @@ def continuous_check(verbose: bool = False,
                 print(f"\nTesting phrase: {mnemonic}")
                 print(f"Testing address: {address}")
             
-            for network in active_networks:
-                balance = BalanceChecker.check_balance(address, network)
-                if float(balance) > 0:
-                    found_balance = True
-                    balances.append({
-                        "network": network.name,
-                        "balance": balance
-                    })
-                    logger.info(f"Found balance! Network: {network.name}, Amount: {balance}")
+            for network in active_networks or []:
+                try:
+                    balance = float(BalanceChecker.check_balance(address, network) or 0)
+                    if balance > 0:
+                        found_balance = True
+                        balances.append({
+                            "network": network.name,
+                            "balance": balance
+                        })
+                        logger.info(f"Found balance! Network: {network.name}, Amount: {balance}")
+                except (TypeError, ValueError):
+                    continue
             
             if found_balance:
                 ResultLogger.log_finding(
@@ -635,7 +664,6 @@ def continuous_check(verbose: bool = False,
             logger.error(f"Error in main loop: {str(e)}")
             time.sleep(1)
             continue
-
 # Add to main() function at the start:
 def main():
     """Main function"""
@@ -653,16 +681,21 @@ def main():
             logger.error(f"No API key configured for network: {args.network}")
             return
 
+        # Get max attempts with proper type handling
+        max_attempts = get_max_attempts(args)
+        if max_attempts is None:
+            max_attempts = DEFAULT_MAX_ATTEMPTS
+
         logger.info(f"Helsinki v{VERSION} - Starting wallet generator")
         logger.info(f"Active Networks: {', '.join(net.name for net in active_networks)}")
-        logger.info(f"Maximum attempts: {'infinite' if args.attempts == 0 else args.attempts}")
+        logger.info(f"Maximum attempts: {max_attempts}")
         print("Press Ctrl+C to stop...")
         
         continuous_check(
             verbose=args.verbose,
             delay=args.delay,
             network_choice=args.network,
-            max_attempts=args.attempts,
+            max_attempts=int(max_attempts),
             active_networks=active_networks
         )
     except KeyboardInterrupt:
