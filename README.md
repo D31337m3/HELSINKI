@@ -2,6 +2,10 @@
 
 A high-performance crypto wallet generator with multi-chain balance checking capabilities.
 
+Disclaimer
+This tool is for educational and research purposes only. Users must comply with all applicable laws and regulations regarding cryptocurrency operations in their jurisdiction.
+
+
 ## Features
 
 - Multi-chain wallet generation using cryptographic primitives
@@ -150,5 +154,3 @@ Development
 
 #####################################################################################
 
-Disclaimer
-This tool is for educational and research purposes only. Users must comply with all applicable laws and regulations regarding cryptocurrency operations in their jurisdiction.
