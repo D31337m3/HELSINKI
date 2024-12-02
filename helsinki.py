@@ -390,26 +390,17 @@ class WalletGenerator:
     @staticmethod
     def generate_seed() -> bytes:
         """Generate cryptographically secure random seed"""
-        return secrets.token_bytes(32)
+        return secrets.token_bytes(16)  # 128 bits for 12-word mnemonic
 
     @staticmethod
     def generate_mnemonic(wordlist: List[str]) -> str:
         """Generate BIP39 compliant mnemonic"""
-        try:
-            entropy = WalletGenerator.generate_seed()
-            h = hashlib.sha256(entropy).hexdigest()
-            binary = bin(int.from_bytes(entropy, byteorder='big'))[2:].zfill(256)
-            checksum = bin(int(h[0:2], 16))[2:].zfill(8)
-            bits = binary + checksum
-            
-            return ' '.join(
-                wordlist[int(bits[i:i+11], 2)]
-                for i in range(0, len(bits)-8, 11)
-            )
-        except Exception as e:
-            logger.error(f"Mnemonic generation failed: {e}")
-            raise
-
+        entropy = WalletGenerator.generate_seed()
+        binary = bin(int.from_bytes(entropy, byteorder='big'))[2:].zfill(128)
+        checksum = bin(int(hashlib.sha256(entropy).hexdigest(), 16))[2:].zfill(256)[:4]
+        bits = binary + checksum
+        indices = [int(bits[i:i+11], 2) for i in range(0, 132, 11)]
+        return ' '.join(wordlist[i] for i in indices)
     @staticmethod
     def derive_address(mnemonic: str) -> str:
         """Generate deterministic address from mnemonic"""
